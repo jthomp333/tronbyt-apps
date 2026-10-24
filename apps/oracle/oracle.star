@@ -14,6 +14,8 @@ load("time.star", "time")
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_PROMPT = "You are the oracle of a small home server. In one calm, slightly cryptic sentence of at most 18 words, with no preamble or quotation marks, give the thought for the day."
 TIMEZONE = "America/Chicago"
+DEFAULT_TITLE = "ORACLE"
+MAX_TITLE = 14  # what fits beside the lamp in the tom-thumb font
 
 # Kiosk colors: amber label, cyan line.
 AMBER = "#ffb547"
@@ -28,9 +30,10 @@ def main(config):
     model = config.str("model", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     prompt = config.str("prompt", DEFAULT_PROMPT).strip() or DEFAULT_PROMPT
     frequency = config.str("frequency", "daily")
+    title = config.str("title", DEFAULT_TITLE).strip().upper()[:MAX_TITLE] or DEFAULT_TITLE
 
     if not ollama_url:
-        return show("Set the Ollama URL in this app's settings.", DIM)
+        return show("Set the Ollama URL in this app's settings.", DIM, title)
 
     now = time.now().in_location(TIMEZONE)
     if frequency == "hourly":
@@ -45,7 +48,7 @@ def main(config):
 
     line = cache.get(key)
     if line == None:
-        line = ask_ollama(ollama_url, model, prompt)
+        line = ask_ollama(ollama_url, model, prompt + " " + today_context(now, frequency))
         if line:
             cache.set(key, line, ttl_seconds = ttl)
             cache.set(last_key, line, ttl_seconds = LAST_LINE_TTL)
@@ -54,9 +57,27 @@ def main(config):
             line = cache.get(last_key)
 
     if not line:
-        return show("The oracle is silent. Ollama did not answer.", DIM)
+        return show("The oracle is silent. Ollama did not answer.", DIM, title)
 
-    return show(line, CYAN)
+    return show(line, CYAN, title)
+
+def today_context(now, frequency):
+    # Tells the model the day (and, hourly, the part of day) so lines vary with the calendar.
+    context = "Today is %s." % now.format("Monday, January 2")
+    if frequency == "hourly":
+        hour = now.hour
+        if hour < 5:
+            part = "deep night"
+        elif hour < 12:
+            part = "morning"
+        elif hour < 17:
+            part = "afternoon"
+        elif hour < 21:
+            part = "evening"
+        else:
+            part = "night"
+        context += " It is %s." % part
+    return context
 
 def ask_ollama(base_url, model, prompt):
     resp = http.post(
@@ -82,13 +103,13 @@ def clean(text):
     text = text.strip("\"'“”")
     return text
 
-def show(line, color):
+def show(line, color, title):
     header = render.Row(
         main_align = "space_between",
         cross_align = "center",
         expanded = True,
         children = [
-            render.Text("ORACLE", font = "tom-thumb", color = AMBER),
+            render.Text(title, font = "tom-thumb", color = AMBER),
             render.Circle(diameter = 3, color = AMBER),
         ],
     )
@@ -126,6 +147,13 @@ def get_schema():
     return schema.Schema(
         version = "1",
         fields = [
+            schema.Text(
+                id = "title",
+                name = "Title",
+                desc = "Header text, up to 14 characters.",
+                icon = "house",
+                default = DEFAULT_TITLE,
+            ),
             schema.Text(
                 id = "ollama_url",
                 name = "Ollama URL",
