@@ -20,12 +20,22 @@ AMBER = "#ffb547"
 CYAN = "#5ce1e6"
 DIM = "#555"
 
+# Milliseconds per 1-pixel step of the scroll. Lower is faster.
+SCROLL_SPEEDS = {
+    "very_slow": 200,
+    "slow": 150,
+    "normal": 100,
+    "fast": 70,
+    "very_fast": 50,
+}
+
 def main(config):
     feed = config.str("feed_url", DEFAULT_FEED).strip().rstrip("/") or DEFAULT_FEED
     model = config.str("model", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     prompt = config.str("prompt", DEFAULT_PROMPT).strip() or DEFAULT_PROMPT
     frequency = config.str("frequency", "daily")
     title = config.str("title", DEFAULT_TITLE).strip().upper()[:MAX_TITLE] or DEFAULT_TITLE
+    delay = SCROLL_SPEEDS.get(config.str("scroll_speed", "normal"), 100)
 
     # The helper answers at once: the current line, or the last one while a new
     # one is being written in the background.
@@ -35,16 +45,16 @@ def main(config):
         ttl_seconds = 60,
     )
     if resp.status_code != 200:
-        return show("The oracle is silent. The feed answered %d." % resp.status_code, DIM, title)
+        return show("The oracle is silent. The feed answered %d." % resp.status_code, DIM, title, delay)
 
     line = resp.json().get("line")
     if line:
-        return show(line, CYAN, title)
+        return show(line, CYAN, title, delay)
     if resp.json().get("thinking"):
-        return show("The oracle is thinking...", DIM, title)
-    return show("The oracle is silent. Ollama did not answer.", DIM, title)
+        return show("The oracle is thinking...", DIM, title, delay)
+    return show("The oracle is silent. Ollama did not answer.", DIM, title, delay)
 
-def show(line, color, title):
+def show(line, color, title, delay):
     header = render.Row(
         main_align = "space_between",
         cross_align = "center",
@@ -70,7 +80,7 @@ def show(line, color, title):
     )
 
     return render.Root(
-        delay = 100,
+        delay = delay,
         show_full_animation = True,
         child = render.Padding(
             pad = (1, 1, 1, 0),
@@ -118,6 +128,20 @@ def get_schema():
                 options = [
                     schema.Option(display = "Once a day", value = "daily"),
                     schema.Option(display = "Every hour", value = "hourly"),
+                ],
+            ),
+            schema.Dropdown(
+                id = "scroll_speed",
+                name = "Scroll speed",
+                desc = "How fast the thought scrolls up the screen.",
+                icon = "gauge",
+                default = "normal",
+                options = [
+                    schema.Option(display = "Very slow", value = "very_slow"),
+                    schema.Option(display = "Slow", value = "slow"),
+                    schema.Option(display = "Normal", value = "normal"),
+                    schema.Option(display = "Fast", value = "fast"),
+                    schema.Option(display = "Very fast", value = "very_fast"),
                 ],
             ),
             schema.Text(
