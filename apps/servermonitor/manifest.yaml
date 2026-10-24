@@ -1,0 +1,14 @@
+---
+id: server-monitor
+name: Server Monitor
+packageName: servermonitor
+summary: Home server readouts
+desc: CPU, memory, temperature, disks, containers and uptime from a Glances server, on three pages.
+author: Jacob Thompson
+fileName: server_monitor.star
+recommendedInterval: 5
+category: technology
+tags:
+  - server
+  - glances
+  - homelab
