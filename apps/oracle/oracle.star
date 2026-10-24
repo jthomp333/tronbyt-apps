@@ -1,19 +1,17 @@
 """
 Applet: Oracle
 Summary: A thought from your Ollama
-Description: Asks a local Ollama model for one calm, slightly cryptic thought and scrolls it on the display. The same idea as the Oracle strip on the homepage kiosk.
+Description: Shows one calm, slightly cryptic thought from a local Ollama model, fetched through the tidbyt-feed helper so a slow or sleeping Ollama never blocks the display.
 Author: Jacob Thompson
 """
 
-load("cache.star", "cache")
 load("http.star", "http")
 load("render.star", "render")
 load("schema.star", "schema")
-load("time.star", "time")
 
+DEFAULT_FEED = "http://tidbyt-feed:8080"
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_PROMPT = "You are the oracle of a small home server. In one calm, slightly cryptic sentence of at most 18 words, with no preamble or quotation marks, give the thought for the day."
-TIMEZONE = "America/Chicago"
 DEFAULT_TITLE = "ORACLE"
 MAX_TITLE = 14  # what fits beside the lamp in the tom-thumb font
 
@@ -22,86 +20,29 @@ AMBER = "#ffb547"
 CYAN = "#5ce1e6"
 DIM = "#555"
 
-# Keep the last good line for a week so an Ollama outage still shows something.
-LAST_LINE_TTL = 7 * 24 * 3600
-
 def main(config):
-    ollama_url = config.str("ollama_url", "").strip().rstrip("/")
+    feed = config.str("feed_url", DEFAULT_FEED).strip().rstrip("/") or DEFAULT_FEED
     model = config.str("model", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     prompt = config.str("prompt", DEFAULT_PROMPT).strip() or DEFAULT_PROMPT
     frequency = config.str("frequency", "daily")
     title = config.str("title", DEFAULT_TITLE).strip().upper()[:MAX_TITLE] or DEFAULT_TITLE
 
-    if not ollama_url:
-        return show("Set the Ollama URL in this app's settings.", DIM, title)
-
-    now = time.now().in_location(TIMEZONE)
-    if frequency == "hourly":
-        period = now.format("2006-01-02T15")
-        ttl = 3600
-    else:
-        period = now.format("2006-01-02")
-        ttl = 24 * 3600
-
-    key = "line-%s-%s" % (hash(ollama_url + model + prompt), period)
-    last_key = "last-%s" % hash(ollama_url + model + prompt)
-
-    line = cache.get(key)
-    if line == None:
-        line = ask_ollama(ollama_url, model, prompt + " " + today_context(now, frequency))
-        if line:
-            cache.set(key, line, ttl_seconds = ttl)
-            cache.set(last_key, line, ttl_seconds = LAST_LINE_TTL)
-        else:
-            # Ollama is down or slow: fall back to the last line we got.
-            line = cache.get(last_key)
-
-    if not line:
-        return show("The oracle is silent. Ollama did not answer.", DIM, title)
-
-    return show(line, CYAN, title)
-
-def today_context(now, frequency):
-    # Tells the model the day (and, hourly, the part of day) so lines vary with the calendar.
-    context = "Today is %s." % now.format("Monday, January 2")
-    if frequency == "hourly":
-        hour = now.hour
-        if hour < 5:
-            part = "deep night"
-        elif hour < 12:
-            part = "morning"
-        elif hour < 17:
-            part = "afternoon"
-        elif hour < 21:
-            part = "evening"
-        else:
-            part = "night"
-        context += " It is %s." % part
-    return context
-
-def ask_ollama(base_url, model, prompt):
-    resp = http.post(
-        base_url + "/api/generate",
-        json_body = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            # Stops qwen3 from spending its token budget on hidden reasoning.
-            "think": False,
-            "options": {"num_predict": 48, "temperature": 0.9},
-        },
+    # The helper answers at once: the current line, or the last one while a new
+    # one is being written in the background.
+    resp = http.get(
+        feed + "/oracle",
+        params = {"prompt": prompt, "model": model, "freq": frequency},
+        ttl_seconds = 60,
     )
     if resp.status_code != 200:
-        print("Ollama returned %d" % resp.status_code)
-        return None
+        return show("The oracle is silent. The feed answered %d." % resp.status_code, DIM, title)
 
-    text = resp.json().get("response", "")
-    return clean(text)
-
-def clean(text):
-    text = " ".join(text.strip().split())
-    text = text.strip("\"'“”")
-    return text
+    line = resp.json().get("line")
+    if line:
+        return show(line, CYAN, title)
+    if resp.json().get("thinking"):
+        return show("The oracle is thinking...", DIM, title)
+    return show("The oracle is silent. Ollama did not answer.", DIM, title)
 
 def show(line, color, title):
     header = render.Row(
@@ -155,10 +96,11 @@ def get_schema():
                 default = DEFAULT_TITLE,
             ),
             schema.Text(
-                id = "ollama_url",
-                name = "Ollama URL",
-                desc = "Address of your Ollama server, for example http://192.168.1.20:11434",
+                id = "feed_url",
+                name = "Feed URL",
+                desc = "Address of the tidbyt-feed helper. The default works when it shares Tronbyt's Docker network.",
                 icon = "server",
+                default = DEFAULT_FEED,
             ),
             schema.Text(
                 id = "model",

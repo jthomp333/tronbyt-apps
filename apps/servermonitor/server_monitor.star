@@ -11,6 +11,7 @@ load("render.star", "render")
 load("schema.star", "schema")
 
 DEFAULT_TITLE = "MONGO2"
+DEFAULT_FEED = "http://tidbyt-feed:8080"
 
 # Kiosk palette.
 AMBER = "#ffb547"
@@ -50,6 +51,7 @@ ALERT_NAMES = {
 def main(config):
     base = config.str("glances_url", "").strip().rstrip("/")
     title = config.str("title", DEFAULT_TITLE).strip().upper()[:12] or DEFAULT_TITLE
+    feed = config.str("feed_url", DEFAULT_FEED).strip().rstrip("/") or DEFAULT_FEED
 
     if not base:
         return message(title, "Set the Glances URL in this app's settings.")
@@ -105,22 +107,27 @@ def main(config):
     else:
         alert_color, alert_text = GREEN, "NONE"
 
-    # Fourth row scrolls whatever needs explaining: down containers first, then the alert.
-    notes = []
+    # The alert row scrolls whatever needs explaining: down containers first, then the alert.
+    notes = [alert_text]
     if bad:
         notes.append("down: " + ", ".join(bad))
     if alert and alert["msg"]:
         notes.append(alert["msg"])
-    if notes:
-        detail = render.Marquee(width = 62, child = render.Text(" | ".join(notes), font = FONT, color = DIM))
+    if len(notes) > 1:
+        alert_row = render.Row(children = [
+            label_box("ALRT"),
+            render.Marquee(width = 62 - LABEL_WIDTH, child = render.Text(" | ".join(notes), font = FONT, color = alert_color)),
+        ])
     else:
-        detail = render.Box(height = 6)
+        alert_row = text_row("ALRT", alert_text, alert_color)
+
+    ai_text, ai_color = ollama_status(feed)
 
     page3 = page(title, lamp, [
         text_row("UP", uptime, CYAN),
         text_row("DOCK", dock_text, dock_color),
-        text_row("ALRT", alert_text, alert_color),
-        detail,
+        alert_row,
+        text_row("AI", ai_text, ai_color),
     ])
 
     return render.Root(
@@ -137,6 +144,24 @@ def get(url):
         print("Glances %s returned %d" % (url, resp.status_code))
         return None
     return resp.json()
+
+def ollama_status(feed):
+    # Read through tidbyt-feed, which polls Ollama in the background, so a
+    # sleeping Ollama box can't stall this app.
+    resp = http.get(feed + "/ollama", ttl_seconds = 30)
+    if resp.status_code != 200:
+        return "NO FEED", DIM
+    status = resp.json()
+    if not status.get("checked_at"):
+        return "--", DIM
+    if not status.get("online"):
+        return "OFF", DIM
+    loaded = status.get("loaded") or []
+    if not loaded:
+        return "IDLE", CYAN
+    name = loaded[0].get("name", "")
+    gb = (loaded[0].get("size_vram", 0) or 0) / (1024 * 1024 * 1024)
+    return "%s %sG" % (name.split(":")[0][:6].upper(), one_decimal(gb)), GREEN
 
 def cpu_temp(sensors):
     # AMD reports the CPU as Tctl, Intel as Package id 0.
@@ -306,6 +331,13 @@ def get_schema():
                 desc = "Header text, up to 12 characters.",
                 icon = "tag",
                 default = DEFAULT_TITLE,
+            ),
+            schema.Text(
+                id = "feed_url",
+                name = "Feed URL",
+                desc = "Address of the tidbyt-feed helper, used for the Ollama row. The default works when it shares Tronbyt's Docker network.",
+                icon = "brain",
+                default = DEFAULT_FEED,
             ),
         ],
     )

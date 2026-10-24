@@ -3,7 +3,7 @@ id: oracle
 name: Oracle
 packageName: oracle
 summary: A thought from your Ollama
-desc: Asks a local Ollama model for one calm, slightly cryptic thought and scrolls it on the display.
+desc: Shows one calm, slightly cryptic thought from a local Ollama model, fetched through the tidbyt-feed helper.
 author: Jacob Thompson
 fileName: oracle.star
 recommendedInterval: 15

@@ -3,7 +3,7 @@ id: server-monitor
 name: Server Monitor
 packageName: servermonitor
 summary: Home server readouts
-desc: CPU, memory, temperature, load, network and disk activity, containers, uptime and alerts from a Glances server.
+desc: CPU, memory, temperature, load, network and disk activity, containers, uptime, alerts and Ollama status from Glances and tidbyt-feed.
 author: Jacob Thompson
 fileName: server_monitor.star
 recommendedInterval: 5
