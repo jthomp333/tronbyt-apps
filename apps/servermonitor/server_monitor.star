@@ -1,11 +1,12 @@
 """
 Applet: Server Monitor
 Summary: Home server readouts
-Description: CPU, memory, temperature, disks, containers and uptime from a Glances server, on three pages.
+Description: CPU, memory, temperature, load, network and disk activity, containers, uptime and alerts from a Glances server, on three pages.
 Author: Jacob Thompson
 """
 
 load("http.star", "http")
+load("re.star", "re")
 load("render.star", "render")
 load("schema.star", "schema")
 
@@ -26,15 +27,25 @@ BAR_WIDTH = 26
 # Frames per page at 100 ms each: 5 seconds a page.
 PAGE_FRAMES = 50
 
-# Friendlier names for Glances mount points.
-DISK_LABELS = {
-    "/host/root": "ROOT",
-    "/host/fast": "FAST",
-    "/host/media": "MEDIA",
-    "/host/backup": "BKUP",
-}
-
 OK_CONTAINER_STATES = ["running", "healthy"]
+
+# Whole physical disks only, so partitions and RAID devices aren't counted twice.
+WHOLE_DISK = r"^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+)$"
+
+# Interfaces that never carry the server's real traffic.
+SKIP_IFACE = r"^(lo|docker|br-|veth|tailscale|virbr)"
+
+ALERT_NAMES = {
+    "MEMSWAP": "SWAP",
+    "MEM": "RAM",
+    "CPU_TOTAL": "CPU",
+    "CPU_IOWAIT": "IO WAIT",
+    "CPU_USER": "CPU",
+    "CPU_SYSTEM": "CPU",
+    "LOAD": "LOAD",
+    "FS": "DISK",
+    "SENSOR_TEMP": "TEMP",
+}
 
 def main(config):
     base = config.str("glances_url", "").strip().rstrip("/")
@@ -46,23 +57,25 @@ def main(config):
     api = base + "/api/4"
     cpu = get(api + "/cpu/total")
     if cpu == None:
-        return message(title, "Can't reach Glances.")
+        return message(title, "Glances did not answer.")
 
     cpu = cpu.get("total", 0)
     mem = (get(api + "/mem/percent") or {}).get("percent", 0)
     temp = cpu_temp(get(api + "/sensors") or [])
     load5 = (get(api + "/load") or {}).get("min5", 0)
     uptime = short_uptime(get(api + "/uptime") or "")
-    disks = disk_rows(get(api + "/fs") or [])
+    down, up = network_rates(get(api + "/network") or [])
+    read, write = disk_rates(get(api + "/diskio") or [])
+    alert = active_alert(get(api + "/alert") or [])
 
     names = (get(api + "/containers/name") or {}).get("name", [])
     states = (get(api + "/containers/status") or {}).get("status", [])
     bad = [names[i] for i in range(min(len(names), len(states))) if states[i] not in OK_CONTAINER_STATES]
 
-    worst = max([cpu, mem] + [d[1] for d in disks])
-    if bad or worst >= 90 or (temp != None and temp >= 80):
+    worst = max(cpu, mem)
+    if bad or worst >= 90 or (temp != None and temp >= 80) or (alert and alert["state"] == "CRITICAL"):
         lamp = RED
-    elif worst >= 75 or (temp != None and temp >= 70):
+    elif worst >= 75 or (temp != None and temp >= 70) or alert:
         lamp = AMBER
     else:
         lamp = GREEN
@@ -74,24 +87,39 @@ def main(config):
         text_row("LOAD", two_decimals(load5), CYAN),
     ])
 
-    page2 = page(title, lamp, [bar_row(label, pct) for label, pct in disks[:4]])
+    page2 = page(title, lamp, [
+        text_row("IN", rate(down), CYAN),
+        text_row("OUT", rate(up), CYAN),
+        text_row("READ", rate(read), CYAN),
+        text_row("WRIT", rate(write), CYAN),
+    ])
 
     if bad:
-        status_text = "%d DOWN" % len(bad)
-        status_color = RED
-        detail = render.Marquee(
-            width = 62,
-            child = render.Text(", ".join(bad), font = FONT, color = RED),
-        )
+        dock_text, dock_color = "%d DOWN" % len(bad), RED
     else:
-        status_text = "ALL OK"
-        status_color = GREEN
-        detail = render.Text("", font = FONT)
+        dock_text, dock_color = "%d OK" % len(names), GREEN
+
+    if alert:
+        alert_color = RED if alert["state"] == "CRITICAL" else AMBER
+        alert_text = alert["name"]
+    else:
+        alert_color, alert_text = GREEN, "NONE"
+
+    # Fourth row scrolls whatever needs explaining: down containers first, then the alert.
+    notes = []
+    if bad:
+        notes.append("down: " + ", ".join(bad))
+    if alert and alert["msg"]:
+        notes.append(alert["msg"])
+    if notes:
+        detail = render.Marquee(width = 62, child = render.Text(" | ".join(notes), font = FONT, color = DIM))
+    else:
+        detail = render.Box(height = 6)
 
     page3 = page(title, lamp, [
         text_row("UP", uptime, CYAN),
-        text_row("DOCK", "%d RUN" % len(names), CYAN),
-        text_row("STAT", status_text, status_color),
+        text_row("DOCK", dock_text, dock_color),
+        text_row("ALRT", alert_text, alert_color),
         detail,
     ])
 
@@ -118,17 +146,45 @@ def cpu_temp(sensors):
                 return int(s["value"])
     return None
 
-def disk_rows(fs):
-    rows = []
-    seen = {}
-    for d in fs:
-        mount = d.get("mnt_point", "")
-        if not mount.startswith("/host/") or mount in seen:
+def network_rates(interfaces):
+    # The busiest real interface is the server's main link.
+    best = None
+    for n in interfaces:
+        if re.match(SKIP_IFACE, n.get("interface_name", "")):
             continue
-        seen[mount] = True
-        label = DISK_LABELS.get(mount, mount.replace("/host/", "").upper()[:5])
-        rows.append((label, d.get("percent", 0)))
-    return rows
+        if best == None or n.get("bytes_all_rate_per_sec", 0) > best.get("bytes_all_rate_per_sec", 0):
+            best = n
+    if best == None:
+        return 0, 0
+    return best.get("bytes_recv_rate_per_sec", 0) or 0, best.get("bytes_sent_rate_per_sec", 0) or 0
+
+def disk_rates(disks):
+    read = 0
+    write = 0
+    for d in disks:
+        if re.match(WHOLE_DISK, d.get("disk_name", "")):
+            read += d.get("read_bytes_rate_per_sec", 0) or 0
+            write += d.get("write_bytes_rate_per_sec", 0) or 0
+    return read, write
+
+def active_alert(alerts):
+    # Glances marks an alert that is still happening with end = -1.
+    for a in alerts:
+        if a.get("end", 0) == -1:
+            kind = a.get("type", "")
+            return {
+                "state": a.get("state", "WARNING"),
+                "name": ALERT_NAMES.get(kind, kind.replace("_", " "))[:10],
+                "msg": a.get("global_msg", "") or "",
+            }
+    return None
+
+def rate(bytes_per_sec):
+    if bytes_per_sec >= 1024 * 1024:
+        return one_decimal(bytes_per_sec / (1024 * 1024)) + " MB/s"
+    if bytes_per_sec >= 1024:
+        return "%d KB/s" % int(bytes_per_sec / 1024 + 0.5)
+    return "%d B/s" % int(bytes_per_sec)
 
 def short_uptime(text):
     # Glances gives "5 days, 22:06:20" or "22:06:20".
@@ -154,6 +210,10 @@ def two_decimals(x):
         frac = "0" + frac
     return "%d.%s" % (n // 100, frac)
 
+def one_decimal(x):
+    n = int(x * 10 + 0.5)
+    return "%d.%d" % (n // 10, n % 10)
+
 def level_color(pct):
     if pct >= 90:
         return RED
@@ -170,13 +230,20 @@ def temp_color(temp):
         return AMBER
     return CYAN
 
+def label_box(label):
+    return render.Box(
+        width = LABEL_WIDTH,
+        height = 6,
+        child = render.Row(expanded = True, children = [render.Text(label, font = FONT, color = DIM)]),
+    )
+
 def bar_row(label, pct):
     pct = max(0, min(100, pct))
     filled = int(BAR_WIDTH * pct / 100 + 0.5)
     return render.Row(
         cross_align = "center",
         children = [
-            render.Box(width = LABEL_WIDTH, height = 6, child = render.Row(expanded = True, children = [render.Text(label, font = FONT, color = DIM)])),
+            label_box(label),
             render.Stack(children = [
                 render.Box(width = BAR_WIDTH, height = 4, color = TRACK),
                 render.Box(width = max(filled, 1), height = 4, color = level_color(pct)),
@@ -192,10 +259,7 @@ def bar_row(label, pct):
 def text_row(label, value, color):
     return render.Row(
         cross_align = "center",
-        children = [
-            render.Box(width = LABEL_WIDTH, height = 6, child = render.Row(expanded = True, children = [render.Text(label, font = FONT, color = DIM)])),
-            render.Text(value, font = FONT, color = color),
-        ],
+        children = [label_box(label), render.Text(value, font = FONT, color = color)],
     )
 
 def page(title, lamp, rows):
