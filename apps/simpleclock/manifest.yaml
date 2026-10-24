@@ -1,0 +1,13 @@
+---
+id: simple-clock
+name: Simple Clock
+packageName: simpleclock
+summary: Time and date
+desc: Shows the time with a blinking colon and today's date.
+author: Jacob Thompson
+fileName: simple_clock.star
+recommendedInterval: 1
+category: clocks
+tags:
+  - time
+  - clock
