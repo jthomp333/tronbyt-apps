@@ -21,12 +21,14 @@ RED = "#ff4d4d"
 DIM = "#666"
 TRACK = "#1e1e1e"
 
-FONT = "tom-thumb"
-LABEL_WIDTH = 21
-BAR_WIDTH = 26
+FONT = "tb-8"  # clear N vs M; tom-thumb draws them almost the same
+ROW = 8
+LABEL_WIDTH = 28  # fits "Write" and "Alert" plus a gap
+BAR_LABEL_WIDTH = 20  # bar rows only say CPU or RAM
+BAR_WIDTH = 22
 
-# Frames per page at 100 ms each: 5 seconds a page.
-PAGE_FRAMES = 50
+# Frames per page at 100 ms each: 4 seconds a page.
+PAGE_FRAMES = 40
 
 OK_CONTAINER_STATES = ["running", "healthy"]
 
@@ -85,15 +87,13 @@ def main(config):
     page1 = page(title, lamp, [
         bar_row("CPU", cpu),
         bar_row("RAM", mem),
-        text_row("TEMP", "%dC" % temp if temp != None else "--", temp_color(temp)),
-        text_row("LOAD", two_decimals(load5), CYAN),
+        text_row("Temp", "%dC" % temp if temp != None else "--", temp_color(temp)),
     ])
 
     page2 = page(title, lamp, [
-        text_row("IN", rate(down), CYAN),
-        text_row("OUT", rate(up), CYAN),
-        text_row("READ", rate(read), CYAN),
-        text_row("WRIT", rate(write), CYAN),
+        text_row("Load", two_decimals(load5), CYAN),
+        text_row("In", rate(down), CYAN),
+        text_row("Out", rate(up), CYAN),
     ])
 
     if bad:
@@ -115,17 +115,22 @@ def main(config):
         notes.append(alert["msg"])
     if len(notes) > 1:
         alert_row = render.Row(children = [
-            label_box("ALRT"),
+            label_box("Alert"),
             render.Marquee(width = 62 - LABEL_WIDTH, child = render.Text(" | ".join(notes), font = FONT, color = alert_color)),
         ])
     else:
-        alert_row = text_row("ALRT", alert_text, alert_color)
+        alert_row = text_row("Alert", alert_text, alert_color)
 
     ai_text, ai_color = ollama_status(feed)
 
     page3 = page(title, lamp, [
-        text_row("UP", uptime, CYAN),
-        text_row("DOCK", dock_text, dock_color),
+        text_row("Read", rate(read), CYAN),
+        text_row("Write", rate(write), CYAN),
+        text_row("Up", uptime, CYAN),
+    ])
+
+    page4 = page(title, lamp, [
+        text_row("Dock", dock_text, dock_color),
         alert_row,
         text_row("AI", ai_text, ai_color),
     ])
@@ -134,7 +139,7 @@ def main(config):
         delay = 100,
         show_full_animation = True,
         child = render.Animation(
-            children = [page1] * PAGE_FRAMES + [page2] * PAGE_FRAMES + [page3] * PAGE_FRAMES,
+            children = [page1] * PAGE_FRAMES + [page2] * PAGE_FRAMES + [page3] * PAGE_FRAMES + [page4] * PAGE_FRAMES,
         ),
     )
 
@@ -159,9 +164,10 @@ def ollama_status(feed):
     loaded = status.get("loaded") or []
     if not loaded:
         return "IDLE", CYAN
+
+    # Model name only ("QWEN3"): name plus memory is too wide for the row in tb-8.
     name = loaded[0].get("name", "")
-    gb = (loaded[0].get("size_vram", 0) or 0) / (1024 * 1024 * 1024)
-    return "%s %sG" % (name.split(":")[0][:6].upper(), one_decimal(gb)), GREEN
+    return name.split(":")[0][:7].upper(), GREEN
 
 def cpu_temp(sensors):
     # AMD reports the CPU as Tctl, Intel as Package id 0.
@@ -205,11 +211,16 @@ def active_alert(alerts):
     return None
 
 def rate(bytes_per_sec):
-    if bytes_per_sec >= 1024 * 1024:
-        return one_decimal(bytes_per_sec / (1024 * 1024)) + " MB/s"
-    if bytes_per_sec >= 1024:
-        return "%d KB/s" % int(bytes_per_sec / 1024 + 0.5)
-    return "%d B/s" % int(bytes_per_sec)
+    # Compact units ("244K/s") so values fit beside the labels in tb-8.
+    kb = bytes_per_sec / 1024
+    if kb >= 1000:
+        mb = kb / 1024
+        if mb >= 100:
+            return "%dM/s" % int(mb + 0.5)
+        return one_decimal(mb) + "M/s"
+    if kb >= 1:
+        return "%dK/s" % int(kb + 0.5)
+    return "%dB/s" % int(bytes_per_sec)
 
 def short_uptime(text):
     # Glances gives "5 days, 22:06:20" or "22:06:20".
@@ -255,10 +266,10 @@ def temp_color(temp):
         return AMBER
     return CYAN
 
-def label_box(label):
+def label_box(label, width = LABEL_WIDTH):
     return render.Box(
-        width = LABEL_WIDTH,
-        height = 6,
+        width = width,
+        height = ROW,
         child = render.Row(expanded = True, children = [render.Text(label, font = FONT, color = DIM)]),
     )
 
@@ -268,12 +279,12 @@ def bar_row(label, pct):
     return render.Row(
         cross_align = "center",
         children = [
-            label_box(label),
+            label_box(label, BAR_LABEL_WIDTH),
             render.Stack(children = [
-                render.Box(width = BAR_WIDTH, height = 4, color = TRACK),
-                render.Box(width = max(filled, 1), height = 4, color = level_color(pct)),
+                render.Box(width = BAR_WIDTH, height = 5, color = TRACK),
+                render.Box(width = max(filled, 1), height = 5, color = level_color(pct)),
             ]),
-            render.Box(width = 62 - LABEL_WIDTH - BAR_WIDTH, height = 6, child = render.Row(
+            render.Box(width = 62 - BAR_LABEL_WIDTH - BAR_WIDTH, height = ROW, child = render.Row(
                 expanded = True,
                 main_align = "end",
                 children = [render.Text("%d%%" % int(pct + 0.5), font = FONT, color = CYAN)],
@@ -288,30 +299,29 @@ def text_row(label, value, color):
     )
 
 def page(title, lamp, rows):
-    header = render.Row(
-        main_align = "space_between",
-        cross_align = "center",
-        expanded = True,
-        children = [
-            render.Text(title, font = FONT, color = AMBER),
-            render.Circle(diameter = 3, color = lamp),
-        ],
-    )
-    return render.Padding(
-        pad = (1, 1, 1, 0),
-        child = render.Column(
+    # 8 px header + three 8 px rows fill the 32 px screen exactly. tb-8 capitals
+    # leave the header's bottom pixel row empty, which separates it from row one.
+    header = render.Box(
+        height = ROW,
+        child = render.Row(
+            main_align = "space_between",
+            cross_align = "center",
+            expanded = True,
             children = [
-                header,
-                render.Box(height = 1, color = "#222"),
-                render.Column(children = rows),
+                render.Text(title, font = FONT, color = AMBER),
+                render.Circle(diameter = 3, color = lamp),
             ],
         ),
+    )
+    return render.Padding(
+        pad = (1, 0, 1, 0),
+        child = render.Column(children = [header] + rows),
     )
 
 def message(title, text):
     return render.Root(
         child = page(title, DIM, [
-            render.WrappedText(content = text, width = 62, font = FONT, color = DIM),
+            render.WrappedText(content = text, width = 62, font = FONT, color = DIM, linespacing = 0),
         ]),
     )
 

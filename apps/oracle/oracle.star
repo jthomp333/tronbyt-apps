@@ -13,7 +13,8 @@ DEFAULT_FEED = "http://tidbyt-feed:8080"
 DEFAULT_MODEL = "qwen3:14b"
 DEFAULT_PROMPT = "You are the oracle of a small home server. In one calm, slightly cryptic sentence of at most 18 words, with no preamble or quotation marks, give the thought for the day."
 DEFAULT_TITLE = "ORACLE"
-MAX_TITLE = 14  # what fits beside the lamp in the tom-thumb font
+MAX_TITLE = 14  # what fits beside the lamp
+FONT = "tb-8"  # clear N vs M; tom-thumb draws them almost the same
 
 # Kiosk colors: amber label, cyan line.
 AMBER = "#ffb547"
@@ -55,27 +56,31 @@ def main(config):
     return show("The oracle is silent. Ollama did not answer.", DIM, title, delay)
 
 def show(line, color, title, delay):
-    header = render.Row(
-        main_align = "space_between",
-        cross_align = "center",
-        expanded = True,
-        children = [
-            render.Text(title, font = "tom-thumb", color = AMBER),
-            render.Circle(diameter = 3, color = AMBER),
-        ],
+    # 8 px header + 1 px rule + 23 px of scrolling text = the full 32 px.
+    header = render.Box(
+        height = 8,
+        child = render.Row(
+            main_align = "space_between",
+            cross_align = "center",
+            expanded = True,
+            children = [
+                render.Text(title, font = FONT, color = AMBER),
+                render.Circle(diameter = 3, color = AMBER),
+            ],
+        ),
     )
 
     body = render.Marquee(
-        height = 24,
+        height = 23,
         scroll_direction = "vertical",
-        offset_start = 24,
-        offset_end = 24,
+        offset_start = 23,
+        offset_end = 23,
         child = render.WrappedText(
             content = line,
             width = 62,
-            font = "tom-thumb",
+            font = FONT,
             color = color,
-            linespacing = 1,
+            linespacing = 0,
         ),
     )
 
@@ -83,7 +88,7 @@ def show(line, color, title, delay):
         delay = delay,
         show_full_animation = True,
         child = render.Padding(
-            pad = (1, 1, 1, 0),
+            pad = (1, 0, 1, 0),
             child = render.Column(
                 children = [
                     header,

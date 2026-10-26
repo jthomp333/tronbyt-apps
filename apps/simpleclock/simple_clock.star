@@ -31,7 +31,7 @@ def main(config):
     hour_format = "15" if use_24h else "3"
     hours = now.format(hour_format)
     minutes = now.format("04")
-    date = now.format("Mon Jan 2").upper()
+    date = now.format("Mon Jan 2")
 
     # Two frames: colon on, colon off. With a 500 ms delay it blinks once a second.
     frames = [
@@ -51,8 +51,8 @@ def clock_frame(hours, separator, minutes, now, use_24h, color, date):
     if not use_24h:
         time_row.append(
             render.Padding(
-                pad = (1, 6, 0, 0),
-                child = render.Text(now.format("PM"), font = "tom-thumb", color = "#888"),
+                pad = (1, 4, 0, 0),
+                child = render.Text(now.format("PM"), font = "tb-8", color = "#888"),
             ),
         )
 
@@ -63,7 +63,7 @@ def clock_frame(hours, separator, minutes, now, use_24h, color, date):
             cross_align = "center",
             children = [
                 render.Row(children = time_row),
-                render.Text(date, font = "tom-thumb", color = "#FFF"),
+                render.Text(date, font = "tb-8", color = "#FFF"),
             ],
         ),
     )
